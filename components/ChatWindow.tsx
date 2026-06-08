@@ -17,7 +17,7 @@ interface SpeechRecognitionInstance extends EventTarget {
   stop(): void;
   onresult: ((e: SpeechRecognitionEvent) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((e: Event & { error?: string }) => void) | null;
 }
 declare global {
   interface Window {
@@ -167,20 +167,12 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     setReflectionStep(null);
   };
 
-  const toggleVoice = useCallback(async () => {
+  const toggleVoice = useCallback(() => {
     setVoiceError("");
 
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
-      return;
-    }
-
-    // Explicitly request mic permission first so the browser shows the dialog
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setVoiceError("Нет доступа к микрофону. Разрешите в настройках браузера.");
       return;
     }
 
@@ -192,21 +184,35 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
 
     const recognition = new SR();
     recognition.lang = "ru-RU";
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true;      // не останавливается на паузах
+    recognition.interimResults = true;  // слова появляются по мере речи
 
     recognition.onresult = (e: SpeechRecognitionEvent) => {
-      const transcript = e.results[0][0].transcript;
-      setInput((prev) => (prev ? prev + " " + transcript : transcript));
-      inputRef.current?.focus();
+      let finalText = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalText += e.results[i][0].transcript;
+        }
+      }
+      if (finalText) {
+        setInput((prev) => (prev ? prev + " " + finalText : finalText).trim());
+      }
     };
 
     recognition.onend = () => setIsListening(false);
 
-    recognition.onerror = () => {
+    recognition.onerror = (e: Event & { error?: string }) => {
       setIsListening(false);
-      setVoiceError("Не удалось распознать речь. Попробуйте ещё раз.");
-      setTimeout(() => setVoiceError(""), 3000);
+      const code = e.error ?? "";
+      if (code === "not-allowed") {
+        setVoiceError("Нет доступа к микрофону. Разрешите в настройках браузера.");
+      } else if (code === "no-speech") {
+        setVoiceError("Речь не обнаружена. Попробуйте ещё раз.");
+        setTimeout(() => setVoiceError(""), 3000);
+      } else {
+        setVoiceError("Ошибка записи. Попробуйте ещё раз.");
+        setTimeout(() => setVoiceError(""), 3000);
+      }
     };
 
     recognitionRef.current = recognition;
@@ -214,7 +220,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       recognition.start();
       setIsListening(true);
     } catch {
-      setVoiceError("Не удалось запустить запись. Попробуйте ещё раз.");
+      setVoiceError("Не удалось запустить запись. Перезагрузите страницу.");
     }
   }, [isListening]);
 
