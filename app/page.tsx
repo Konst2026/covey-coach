@@ -11,21 +11,22 @@ export default function Home() {
     <div className="min-h-screen bg-[#F8F5EE] flex flex-col">
       {/* Header */}
       <header className="border-b border-[#D6C6A5] bg-[#F8F5EE]/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-[#A38B4F] flex items-center justify-center">
-              <span className="text-white text-sm font-bold">7</span>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#A38B4F] flex items-center justify-center">
+              <span className="text-white text-xs font-bold">7</span>
             </div>
-            <span className="font-semibold text-[#1A1814] tracking-tight">Коуч Кови</span>
+            <span className="font-semibold text-[#1A1814] tracking-tight text-sm">Коуч Кови</span>
           </div>
-          <span className="text-xs text-[#6B6355]">Навык {skill.number} из 7</span>
+          <span className="text-xs text-[#6B6355]">Навык {skill.number} / 7</span>
         </div>
       </header>
 
       {/* Main */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-6 grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-6">
-        {/* Left — Skill info */}
-        <div className="flex flex-col gap-4">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-3 py-3 lg:px-6 lg:py-6 grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-3 lg:gap-6">
+
+        {/* Left — Skill info (hidden on mobile, visible on desktop) */}
+        <div className="hidden lg:flex flex-col gap-4">
           <SkillCard skill={skill} />
 
           {/* Week navigation */}
@@ -58,8 +59,30 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right — Chat */}
-        <div className="flex flex-col" style={{ minHeight: "calc(100vh - 140px)" }}>
+        {/* Mobile — compact skill banner */}
+        <div className="lg:hidden bg-[#EFE8D8] rounded-xl p-4 border border-[#D6C6A5]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-lg font-bold text-[#A38B4F]">{skill.number}</span>
+                <span className="text-sm font-semibold text-[#1A1814] truncate">{skill.name}</span>
+              </div>
+              <p className="text-xs text-[#6B6355] italic leading-relaxed line-clamp-2">
+                «{skill.quote}»
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 bg-white/60 rounded-lg p-3">
+            <p className="text-xs font-medium text-[#A38B4F] mb-1 uppercase tracking-wide">Задание</p>
+            <p className="text-xs text-[#1A1814] leading-relaxed">{skill.task}</p>
+          </div>
+        </div>
+
+        {/* Chat — full height */}
+        <div
+          className="flex flex-col"
+          style={{ height: "calc(100dvh - 180px)", minHeight: "400px" }}
+        >
           <ChatWindow skill={skill} />
         </div>
       </main>

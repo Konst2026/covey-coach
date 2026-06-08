@@ -5,6 +5,27 @@ import { Message, loadMessages, saveMessages, clearMessages } from "@/lib/storag
 import { Skill, REFLECTION_QUESTIONS } from "@/lib/covey-data";
 import QuickButtons from "./QuickButtons";
 
+// Web Speech API types not in standard TS lib
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+interface SpeechRecognitionInstance extends EventTarget {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start(): void;
+  stop(): void;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+}
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognitionInstance;
+    webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
+  }
+}
+
 interface ChatWindowProps {
   skill: Skill;
 }
@@ -14,8 +35,18 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [reflectionStep, setReflectionStep] = useState<number | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+
+  useEffect(() => {
+    setVoiceSupported(
+      typeof window !== "undefined" &&
+        !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+    );
+  }, []);
 
   useEffect(() => {
     const saved = loadMessages();
@@ -135,6 +166,35 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     setReflectionStep(null);
   };
 
+  const toggleVoice = useCallback(() => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new SR();
+    recognition.lang = "ru-RU";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
+      const transcript = e.results[0][0].transcript;
+      setInput((prev) => (prev ? prev + " " + transcript : transcript));
+      inputRef.current?.focus();
+    };
+
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [isListening]);
+
   return (
     <div className="flex flex-col h-full bg-white/40 rounded-2xl border border-[#D6C6A5] overflow-hidden">
       {/* Header */}
@@ -192,8 +252,27 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       </div>
 
       {/* Input */}
-      <div className="px-5 py-3 border-t border-[#D6C6A5] bg-[#EFE8D8]/40">
-        <div className="flex gap-3 items-end">
+      <div className="px-4 py-3 border-t border-[#D6C6A5] bg-[#EFE8D8]/40">
+        <div className="flex gap-2 items-end">
+          {voiceSupported && (
+            <button
+              onClick={toggleVoice}
+              disabled={isStreaming}
+              title={isListening ? "Остановить запись" : "Говорить голосом"}
+              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${
+                isListening
+                  ? "bg-red-500 text-white animate-pulse"
+                  : "bg-white/80 border border-[#D6C6A5] text-[#6B6355] hover:bg-[#D6C6A5]"
+              }`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </button>
+          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -201,7 +280,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             onKeyDown={handleKeyDown}
             disabled={isStreaming}
             rows={1}
-            placeholder="Напишите сообщение… (Enter — отправить)"
+            placeholder={isListening ? "Слушаю…" : "Напишите или скажите…"}
             className="flex-1 resize-none rounded-xl border border-[#D6C6A5] bg-white/80 px-4 py-2.5 text-sm text-[#1A1814] placeholder:text-[#6B6355]/60 focus:outline-none focus:ring-2 focus:ring-[#A38B4F]/30 disabled:opacity-50 max-h-32 overflow-y-auto"
             style={{ minHeight: "42px" }}
           />
@@ -216,6 +295,11 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             </svg>
           </button>
         </div>
+        {isListening && (
+          <p className="text-xs text-red-500 mt-1.5 text-center animate-pulse">
+            Говорите… нажмите микрофон ещё раз чтобы остановить
+          </p>
+        )}
       </div>
     </div>
   );
