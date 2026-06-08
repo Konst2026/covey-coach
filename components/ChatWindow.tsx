@@ -39,9 +39,17 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceError, setVoiceError] = useState("");
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const transcriptRef = useRef(""); // tracks voice transcript synchronously for auto-send
+  const ttsEnabledRef = useRef(false); // sync ref so speakText closure stays fresh
+
+  useEffect(() => {
+    ttsEnabledRef.current = ttsEnabled;
+  }, [ttsEnabled]);
 
   useEffect(() => {
     setVoiceSupported(
@@ -55,17 +63,27 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     if (saved.length > 0) {
       setMessages(saved);
     } else {
-      const welcome: Message = {
+      setMessages([{
         role: "assistant",
         content: `Добро пожаловать! Сегодня работаем с Навыком ${skill.number} — **${skill.name}**.\n\nКакой вопрос у вас есть по этому навыку, или начнём с задания дня?`,
-      };
-      setMessages([welcome]);
+      }]);
     }
   }, [skill]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const speakText = useCallback((text: string) => {
+    if (!ttsEnabledRef.current || typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const clean = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/[*_]/g, "").trim();
+    if (!clean) return;
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utterance.lang = "ru-RU";
+    utterance.rate = 0.95;
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -76,9 +94,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       setMessages(newMessages);
       setInput("");
       setIsStreaming(true);
-
-      const assistantMsg: Message = { role: "assistant", content: "" };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
       try {
         const res = await fetch("/api/chat", {
@@ -110,8 +126,8 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
 
         const finalMessages: Message[] = [...newMessages, { role: "assistant", content: full }];
         saveMessages(finalMessages);
+        speakText(full); // TTS: AI speaks the response
 
-        // advance reflection
         if (reflectionStep !== null) {
           const nextStep = reflectionStep + 1;
           if (nextStep < REFLECTION_QUESTIONS.length) {
@@ -135,7 +151,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
         setIsStreaming(false);
       }
     },
-    [messages, isStreaming, skill, reflectionStep]
+    [messages, isStreaming, skill, reflectionStep, speakText]
   );
 
   const handleQuickButton = useCallback(
@@ -158,22 +174,33 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   };
 
   const handleClear = () => {
+    window.speechSynthesis?.cancel();
     clearMessages();
-    setMessages([
-      {
-        role: "assistant",
-        content: `История очищена. Продолжаем с Навыком ${skill.number} — **${skill.name}**. Чем могу помочь?`,
-      },
-    ]);
+    setMessages([{
+      role: "assistant",
+      content: `История очищена. Продолжаем с Навыком ${skill.number} — **${skill.name}**. Чем могу помочь?`,
+    }]);
     setReflectionStep(null);
+  };
+
+  const toggleTts = () => {
+    if (ttsEnabled) window.speechSynthesis?.cancel();
+    setTtsEnabled((v) => !v);
   };
 
   const toggleVoice = useCallback(() => {
     setVoiceError("");
 
+    // Stop → auto-send accumulated transcript
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
+      const text = transcriptRef.current.trim();
+      if (text) {
+        sendMessage(text);
+        transcriptRef.current = "";
+        setInput("");
+      }
       return;
     }
 
@@ -183,20 +210,21 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       return;
     }
 
+    transcriptRef.current = "";
     const recognition = new SR();
     recognition.lang = "ru-RU";
-    recognition.continuous = true;      // не останавливается на паузах
-    recognition.interimResults = true;  // слова появляются по мере речи
+    recognition.continuous = true;
+    recognition.interimResults = true;
 
     recognition.onresult = (e: SpeechRecognitionEvent) => {
       let finalText = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalText += e.results[i][0].transcript;
-        }
+        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
       }
       if (finalText) {
-        setInput((prev) => (prev ? prev + " " + finalText : finalText).trim());
+        const next = (transcriptRef.current ? transcriptRef.current + " " + finalText : finalText).trim();
+        transcriptRef.current = next;
+        setInput(next);
       }
     };
 
@@ -223,31 +251,50 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     } catch {
       setVoiceError("Не удалось запустить запись. Перезагрузите страницу.");
     }
-  }, [isListening]);
+  }, [isListening, sendMessage]);
 
   return (
     <div className="flex flex-col h-full bg-white/40 rounded-2xl border border-[#D6C6A5] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-[#D6C6A5] bg-[#EFE8D8]/60">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#D6C6A5] bg-[#EFE8D8]/60">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-[#6D8A63] animate-pulse" />
           <span className="text-sm font-medium text-[#1A1814]">Наставник Кови</span>
         </div>
-        <button
-          onClick={handleClear}
-          className="text-xs text-[#6B6355] hover:text-[#A38B4F] transition-colors"
-        >
-          Очистить
-        </button>
+        <div className="flex items-center gap-3">
+          {/* TTS toggle */}
+          <button
+            onClick={toggleTts}
+            title={ttsEnabled ? "Выключить голос AI" : "Включить голос AI"}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+              ttsEnabled
+                ? "bg-[#A38B4F] text-white"
+                : "text-[#6B6355] hover:text-[#A38B4F]"
+            }`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              {ttsEnabled ? (
+                <>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                </>
+              ) : (
+                <line x1="23" y1="9" x2="17" y2="15" />
+              )}
+            </svg>
+            <span>{ttsEnabled ? "Голос вкл" : "Голос выкл"}</span>
+          </button>
+          <button onClick={handleClear} className="text-xs text-[#6B6355] hover:text-[#A38B4F] transition-colors">
+            Очистить
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 min-h-0">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
         {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
+          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
               className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
                 msg.role === "user"
@@ -277,7 +324,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       </div>
 
       {/* Quick buttons */}
-      <div className="px-5 py-2 border-t border-[#D6C6A5]/50">
+      <div className="px-4 py-2 border-t border-[#D6C6A5]/50">
         <QuickButtons onSelect={handleQuickButton} disabled={isStreaming} />
       </div>
 
@@ -288,10 +335,10 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             <button
               onClick={toggleVoice}
               disabled={isStreaming}
-              title={isListening ? "Остановить запись" : "Говорить голосом"}
+              title={isListening ? "Остановить и отправить" : "Говорить голосом"}
               className={`w-12 h-12 flex items-center justify-center rounded-xl transition-all flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm ${
                 isListening
-                  ? "bg-red-500 text-white scale-105 shadow-red-200 animate-pulse"
+                  ? "bg-red-500 text-white scale-105 animate-pulse"
                   : "bg-[#A38B4F] text-white hover:bg-[#8B7340]"
               }`}
             >
@@ -310,7 +357,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             onKeyDown={handleKeyDown}
             disabled={isStreaming}
             rows={1}
-            placeholder={isListening ? "Слушаю… говорите" : "Напишите или нажмите микрофон…"}
+            placeholder={isListening ? "Слушаю… нажмите микрофон чтобы отправить" : "Напишите или нажмите микрофон…"}
             className="flex-1 resize-none rounded-xl border border-[#D6C6A5] bg-white/80 px-4 py-2.5 text-sm text-[#1A1814] placeholder:text-[#6B6355]/60 focus:outline-none focus:ring-2 focus:ring-[#A38B4F]/30 disabled:opacity-50 max-h-32 overflow-y-auto"
             style={{ minHeight: "42px" }}
           />
@@ -327,13 +374,11 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
         </div>
         {isListening && (
           <p className="text-xs text-red-500 mt-2 text-center font-medium animate-pulse">
-            🎙 Говорите… нажмите микрофон ещё раз чтобы остановить
+            🎙 Говорите… нажмите микрофон ещё раз чтобы отправить
           </p>
         )}
         {voiceError && (
-          <p className="text-xs text-red-500 mt-2 text-center">
-            {voiceError}
-          </p>
+          <p className="text-xs text-red-500 mt-2 text-center">{voiceError}</p>
         )}
       </div>
     </div>

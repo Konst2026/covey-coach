@@ -1,0 +1,18 @@
+{
+  "name": "Коуч Кови — 7 навыков",
+  "short_name": "Коуч Кови",
+  "description": "Персональный AI-наставник по книге Стивена Кови",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8F5EE",
+  "theme_color": "#A38B4F",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
