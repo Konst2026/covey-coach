@@ -8,6 +8,7 @@ import QuickButtons from "./QuickButtons";
 // Web Speech API types not in standard TS lib
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
+  resultIndex: number;
 }
 interface SpeechRecognitionInstance extends EventTarget {
   lang: string;
@@ -189,7 +190,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
 
     recognition.onresult = (e: SpeechRecognitionEvent) => {
       let finalText = "";
-      for (let i = 0; i < e.results.length; i++) {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           finalText += e.results[i][0].transcript;
         }
