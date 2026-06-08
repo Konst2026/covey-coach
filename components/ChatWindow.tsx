@@ -51,8 +51,10 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const messagesRef = useRef<Message[]>([]);
   const isStreamingRef = useRef(false);
   const ttsEnabledRef = useRef(true);
+  const ttsUnlockedRef = useRef(false); // tracks whether speechSynthesis was unlocked by a user gesture
   const sendMessageRef = useRef<(text: string) => void>(() => {});
   const reflectionStepRef = useRef<number | null>(null);
+  const lastFinalIndexRef = useRef(-1); // prevents processing same SpeechRecognition result twice
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
@@ -91,28 +93,52 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     const clean = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/[*_#]/g, "").trim();
     if (!clean) return;
 
-    const perform = () => {
+    const perform = (voices: SpeechSynthesisVoice[]) => {
       const utterance = new SpeechSynthesisUtterance(clean);
-      utterance.lang = "ru-RU";
       utterance.rate = 0.9;
-      const voices = synth.getVoices();
       const ruVoice = voices.find((v) => v.lang.startsWith("ru"));
-      if (ruVoice) utterance.voice = ruVoice;
-      // resume() wakes up audio context on Chrome Android, then speak
-      synth.resume();
+      if (ruVoice) {
+        utterance.voice = ruVoice;
+        utterance.lang = "ru-RU";
+      }
+      // If no Russian voice found — speak without lang constraint (default device voice)
       synth.speak(utterance);
     };
 
-    // Voices may not be loaded on the first call
-    if (synth.getVoices().length > 0) {
-      setTimeout(perform, 100); // short delay after cancel() prevents Chrome silent-fail
-    } else {
-      synth.addEventListener("voiceschanged", () => setTimeout(perform, 100), { once: true });
+    const voices = synth.getVoices();
+    if (voices.length > 0) {
+      setTimeout(() => perform(voices), 100);
+      return;
     }
+
+    // Voices not loaded yet — wait for voiceschanged, with 2s fallback
+    let fired = false;
+    const onLoaded = () => {
+      if (fired) return;
+      fired = true;
+      perform(synth.getVoices());
+    };
+    synth.addEventListener("voiceschanged", onLoaded, { once: true });
+    setTimeout(() => {
+      if (!fired) {
+        fired = true;
+        synth.removeEventListener("voiceschanged", onLoaded);
+        perform([]); // speak with whatever default voice exists
+      }
+    }, 2000);
   }, []);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isStreamingRef.current) return;
+
+    // Unlock speechSynthesis on this user gesture — must happen synchronously before any await.
+    // Chrome Android blocks speak() from async context until first gesture-context call.
+    if (ttsEnabledRef.current && !ttsUnlockedRef.current && window.speechSynthesis) {
+      ttsUnlockedRef.current = true;
+      const unlock = new SpeechSynthesisUtterance(" ");
+      unlock.volume = 0;
+      window.speechSynthesis.speak(unlock);
+    }
 
     // Set ref immediately — prevents any concurrent call before first await
     isStreamingRef.current = true;
@@ -220,7 +246,8 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     if (!next) {
       window.speechSynthesis?.cancel();
     } else if (window.speechSynthesis) {
-      // Speak a silent utterance to unlock the audio context on this user gesture
+      // Unlock on this user gesture
+      ttsUnlockedRef.current = true;
       const u = new SpeechSynthesisUtterance(" ");
       u.volume = 0;
       window.speechSynthesis.speak(u);
@@ -243,6 +270,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     }
 
     transcriptRef.current = "";
+    lastFinalIndexRef.current = -1; // reset for new session
     const recognition = new SR();
     recognition.lang = "ru-RU";
     recognition.continuous = true;
@@ -251,7 +279,12 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     recognition.onresult = (e: SpeechRecognitionEvent) => {
       let finalText = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
+        // Only process a final result once per index — Chrome sometimes fires
+        // onresult twice with the same resultIndex, causing word duplication
+        if (e.results[i].isFinal && i > lastFinalIndexRef.current) {
+          finalText += e.results[i][0].transcript;
+          lastFinalIndexRef.current = i;
+        }
       }
       if (finalText) {
         const next = (transcriptRef.current ? transcriptRef.current + " " + finalText : finalText).trim();
