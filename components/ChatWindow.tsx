@@ -37,6 +37,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const [reflectionStep, setReflectionStep] = useState<number | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
@@ -166,15 +167,28 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     setReflectionStep(null);
   };
 
-  const toggleVoice = useCallback(() => {
+  const toggleVoice = useCallback(async () => {
+    setVoiceError("");
+
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
       return;
     }
 
+    // Explicitly request mic permission first so the browser shows the dialog
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setVoiceError("Нет доступа к микрофону. Разрешите в настройках браузера.");
+      return;
+    }
+
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR) {
+      setVoiceError("Голосовой ввод не поддерживается в этом браузере.");
+      return;
+    }
 
     const recognition = new SR();
     recognition.lang = "ru-RU";
@@ -188,11 +202,20 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     };
 
     recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
+
+    recognition.onerror = () => {
+      setIsListening(false);
+      setVoiceError("Не удалось распознать речь. Попробуйте ещё раз.");
+      setTimeout(() => setVoiceError(""), 3000);
+    };
 
     recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
+    try {
+      recognition.start();
+      setIsListening(true);
+    } catch {
+      setVoiceError("Не удалось запустить запись. Попробуйте ещё раз.");
+    }
   }, [isListening]);
 
   return (
@@ -259,13 +282,13 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
               onClick={toggleVoice}
               disabled={isStreaming}
               title={isListening ? "Остановить запись" : "Говорить голосом"}
-              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`w-12 h-12 flex items-center justify-center rounded-xl transition-all flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm ${
                 isListening
-                  ? "bg-red-500 text-white animate-pulse"
-                  : "bg-white/80 border border-[#D6C6A5] text-[#6B6355] hover:bg-[#D6C6A5]"
+                  ? "bg-red-500 text-white scale-105 shadow-red-200 animate-pulse"
+                  : "bg-[#A38B4F] text-white hover:bg-[#8B7340]"
               }`}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
                 <line x1="12" y1="19" x2="12" y2="23" />
@@ -280,24 +303,29 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             onKeyDown={handleKeyDown}
             disabled={isStreaming}
             rows={1}
-            placeholder={isListening ? "Слушаю…" : "Напишите или скажите…"}
+            placeholder={isListening ? "Слушаю… говорите" : "Напишите или нажмите микрофон…"}
             className="flex-1 resize-none rounded-xl border border-[#D6C6A5] bg-white/80 px-4 py-2.5 text-sm text-[#1A1814] placeholder:text-[#6B6355]/60 focus:outline-none focus:ring-2 focus:ring-[#A38B4F]/30 disabled:opacity-50 max-h-32 overflow-y-auto"
             style={{ minHeight: "42px" }}
           />
           <button
             onClick={() => sendMessage(input)}
             disabled={isStreaming || !input.trim()}
-            className="w-10 h-10 flex items-center justify-center rounded-xl bg-[#A38B4F] text-white hover:bg-[#8B7340] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            className="w-12 h-12 flex items-center justify-center rounded-xl bg-[#A38B4F] text-white hover:bg-[#8B7340] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 shadow-sm"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="22" y1="2" x2="11" y2="13" />
               <polygon points="22 2 15 22 11 13 2 9 22 2" />
             </svg>
           </button>
         </div>
         {isListening && (
-          <p className="text-xs text-red-500 mt-1.5 text-center animate-pulse">
-            Говорите… нажмите микрофон ещё раз чтобы остановить
+          <p className="text-xs text-red-500 mt-2 text-center font-medium animate-pulse">
+            🎙 Говорите… нажмите микрофон ещё раз чтобы остановить
+          </p>
+        )}
+        {voiceError && (
+          <p className="text-xs text-red-500 mt-2 text-center">
+            {voiceError}
           </p>
         )}
       </div>
