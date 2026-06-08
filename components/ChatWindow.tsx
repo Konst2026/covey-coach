@@ -45,12 +45,18 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const transcriptRef = useRef("");
+
+  // Refs that always hold the latest values — prevent stale closures
+  const messagesRef = useRef<Message[]>([]);
+  const isStreamingRef = useRef(false);
   const ttsEnabledRef = useRef(false);
   const sendMessageRef = useRef<(text: string) => void>(() => {});
+  const reflectionStepRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    ttsEnabledRef.current = ttsEnabled;
-  }, [ttsEnabled]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
+  useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
+  useEffect(() => { reflectionStepRef.current = reflectionStep; }, [reflectionStep]);
 
   useEffect(() => {
     setVoiceSupported(
@@ -69,7 +75,8 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
         content: `Добро пожаловать! Сегодня работаем с Навыком ${skill.number} — **${skill.name}**.\n\nКакой вопрос у вас есть по этому навыку, или начнём с задания дня?`,
       }]);
     }
-  }, [skill]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -80,18 +87,36 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     window.speechSynthesis.cancel();
     const clean = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/[*_]/g, "").trim();
     if (!clean) return;
+
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = "ru-RU";
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
+    utterance.rate = 0.9;
+
+    const doSpeak = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const ruVoice = voices.find((v) => v.lang.startsWith("ru"));
+      if (ruVoice) utterance.voice = ruVoice;
+      // Small delay after cancel() to avoid Chrome silent-fail bug
+      setTimeout(() => window.speechSynthesis.speak(utterance), 100);
+    };
+
+    if (window.speechSynthesis.getVoices().length > 0) {
+      doSpeak();
+    } else {
+      window.speechSynthesis.addEventListener("voiceschanged", doSpeak, { once: true });
+    }
   }, []);
 
+  // sendMessage uses refs for messages and isStreaming — no stale closure possible
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || isStreaming) return;
+      if (!text.trim() || isStreamingRef.current) return;
+
+      isStreamingRef.current = true; // guard against concurrent calls immediately
 
       const userMsg: Message = { role: "user", content: text };
-      const newMessages = [...messages, userMsg];
+      const newMessages = [...messagesRef.current, userMsg];
+
       setMessages([...newMessages, { role: "assistant", content: "" }]);
       setInput("");
       setIsStreaming(true);
@@ -117,22 +142,24 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
           const { done, value } = await reader.read();
           if (done) break;
           full += decoder.decode(value, { stream: true });
+          const snapshot = full;
           setMessages((prev) => {
             const updated = [...prev];
-            updated[updated.length - 1] = { role: "assistant", content: full };
+            updated[updated.length - 1] = { role: "assistant", content: snapshot };
             return updated;
           });
         }
 
         const finalMessages: Message[] = [...newMessages, { role: "assistant", content: full }];
         saveMessages(finalMessages);
-        speakText(full); // TTS: AI speaks the response
+        speakText(full);
 
-        if (reflectionStep !== null) {
-          const nextStep = reflectionStep + 1;
+        const step = reflectionStepRef.current;
+        if (step !== null) {
+          const nextStep = step + 1;
           if (nextStep < REFLECTION_QUESTIONS.length) {
             setReflectionStep(nextStep);
-            setTimeout(() => sendMessage(REFLECTION_QUESTIONS[nextStep]), 400);
+            setTimeout(() => sendMessageRef.current(REFLECTION_QUESTIONS[nextStep]), 400);
           } else {
             setReflectionStep(null);
           }
@@ -149,9 +176,10 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
         });
       } finally {
         setIsStreaming(false);
+        isStreamingRef.current = false;
       }
     },
-    [messages, isStreaming, skill, reflectionStep, speakText]
+    [skill, speakText]
   );
 
   useEffect(() => {
@@ -195,7 +223,6 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const toggleVoice = useCallback(() => {
     setVoiceError("");
 
-    // Stop → onend will pick up the transcript and auto-send
     if (isListening) {
       recognitionRef.current?.stop();
       return;
@@ -267,7 +294,6 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
           <span className="text-sm font-medium text-[#1A1814]">Наставник Кови</span>
         </div>
         <div className="flex items-center gap-3">
-          {/* TTS toggle */}
           <button
             onClick={toggleTts}
             title={ttsEnabled ? "Выключить голос AI" : "Включить голос AI"}

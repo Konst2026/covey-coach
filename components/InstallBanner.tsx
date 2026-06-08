@@ -23,7 +23,7 @@ export default function InstallBanner() {
 
   useEffect(() => {
     if (window.matchMedia("(display-mode: standalone)").matches) return;
-    if (localStorage.getItem("pwa_install_dismissed")) return;
+    if (localStorage.getItem("pwa_install_dismissed_v2")) return;
 
     const ua = navigator.userAgent;
     const isIOS = /iPhone|iPad|iPod/.test(ua);
@@ -66,7 +66,7 @@ export default function InstallBanner() {
   };
 
   const dismiss = () => {
-    localStorage.setItem("pwa_install_dismissed", "1");
+    localStorage.setItem("pwa_install_dismissed_v2", "1");
     setDismissed(true);
   };
 
