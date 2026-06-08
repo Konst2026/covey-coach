@@ -7,13 +7,21 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+// Capture the event at module load time — it can fire before React mounts
+let savedPrompt: BeforeInstallPromptEvent | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    savedPrompt = e as BeforeInstallPromptEvent;
+  });
+}
+
 export default function InstallBanner() {
   const [mode, setMode] = useState<"android" | "ios" | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    // Don't show if already installed (running as standalone PWA)
     if (window.matchMedia("(display-mode: standalone)").matches) return;
     if (localStorage.getItem("pwa_install_dismissed")) return;
 
@@ -22,30 +30,39 @@ export default function InstallBanner() {
     const isAndroid = /Android/.test(ua);
 
     if (isIOS) {
-      // iOS Safari — no beforeinstallprompt, show manual instructions
       const isSafari = /Safari/.test(ua) && !/CriOS/.test(ua) && !/Chrome/.test(ua);
       if (isSafari) setMode("ios");
       return;
     }
 
-    if (isAndroid) {
-      const handler = (e: Event) => {
-        e.preventDefault();
-        setDeferredPrompt(e as BeforeInstallPromptEvent);
-        setMode("android");
-      };
-      window.addEventListener("beforeinstallprompt", handler);
-      return () => window.removeEventListener("beforeinstallprompt", handler);
+    if (!isAndroid) return;
+
+    // Check if the event already arrived before we mounted
+    if (savedPrompt) {
+      setDeferredPrompt(savedPrompt);
+      setMode("android");
+      return;
     }
+
+    // Still waiting — poll briefly (service worker may still be installing)
+    const timer = setInterval(() => {
+      if (savedPrompt) {
+        setDeferredPrompt(savedPrompt);
+        setMode("android");
+        clearInterval(timer);
+      }
+    }, 500);
+    // Stop polling after 30 seconds
+    setTimeout(() => clearInterval(timer), 30000);
+
+    return () => clearInterval(timer);
   }, []);
 
   const handleInstall = async () => {
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === "accepted") {
-      dismiss();
-    }
+    if (outcome === "accepted") dismiss();
   };
 
   const dismiss = () => {
@@ -58,20 +75,14 @@ export default function InstallBanner() {
   return (
     <div className="bg-[#1A1814] text-white px-4 py-3 flex items-start justify-between gap-3">
       <div className="flex items-start gap-3 min-w-0">
-        {/* App icon preview */}
         <div className="w-10 h-10 rounded-xl bg-[#A38B4F] flex items-center justify-center flex-shrink-0">
           <span className="text-white font-bold text-lg">7</span>
         </div>
-
         <div className="min-w-0">
           <p className="text-sm font-medium">Установить Коуч Кови</p>
-
           {mode === "android" && (
-            <p className="text-xs text-white/60 mt-0.5">
-              Откройте как приложение — без браузера
-            </p>
+            <p className="text-xs text-white/60 mt-0.5">Откройте как приложение — без браузера</p>
           )}
-
           {mode === "ios" && (
             <p className="text-xs text-white/60 mt-0.5 leading-relaxed">
               Нажмите{" "}

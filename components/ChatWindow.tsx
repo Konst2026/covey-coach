@@ -44,8 +44,9 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const transcriptRef = useRef(""); // tracks voice transcript synchronously for auto-send
-  const ttsEnabledRef = useRef(false); // sync ref so speakText closure stays fresh
+  const transcriptRef = useRef("");
+  const ttsEnabledRef = useRef(false);
+  const sendMessageRef = useRef<(text: string) => void>(() => {});
 
   useEffect(() => {
     ttsEnabledRef.current = ttsEnabled;
@@ -91,10 +92,9 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
 
       const userMsg: Message = { role: "user", content: text };
       const newMessages = [...messages, userMsg];
-      setMessages(newMessages);
+      setMessages([...newMessages, { role: "assistant", content: "" }]);
       setInput("");
       setIsStreaming(true);
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
       try {
         const res = await fetch("/api/chat", {
@@ -154,6 +154,10 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     [messages, isStreaming, skill, reflectionStep, speakText]
   );
 
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+
   const handleQuickButton = useCallback(
     (prompt: string) => {
       if (prompt === "__reflection__") {
@@ -191,16 +195,9 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const toggleVoice = useCallback(() => {
     setVoiceError("");
 
-    // Stop → auto-send accumulated transcript
+    // Stop → onend will pick up the transcript and auto-send
     if (isListening) {
       recognitionRef.current?.stop();
-      setIsListening(false);
-      const text = transcriptRef.current.trim();
-      if (text) {
-        sendMessage(text);
-        transcriptRef.current = "";
-        setInput("");
-      }
       return;
     }
 
@@ -228,7 +225,15 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       }
     };
 
-    recognition.onend = () => setIsListening(false);
+    recognition.onend = () => {
+      setIsListening(false);
+      const text = transcriptRef.current.trim();
+      if (text) {
+        transcriptRef.current = "";
+        setInput("");
+        sendMessageRef.current(text);
+      }
+    };
 
     recognition.onerror = (e: Event & { error?: string }) => {
       setIsListening(false);
@@ -251,7 +256,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
     } catch {
       setVoiceError("Не удалось запустить запись. Перезагрузите страницу.");
     }
-  }, [isListening, sendMessage]);
+  }, [isListening]);
 
   return (
     <div className="flex flex-col h-full bg-white/40 rounded-2xl border border-[#D6C6A5] overflow-hidden">
