@@ -1,5 +1,5 @@
-const CACHE = 'covey-v1';
-const PRECACHE = ['/', '/manifest.json', '/icon.svg'];
+const CACHE = 'covey-v2';
+const PRECACHE = ['/', '/manifest.json', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)));
@@ -16,7 +16,10 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+  // Never cache API calls
   if (e.request.url.includes('/api/')) return;
+  // Never cache Next.js internal routes
+  if (e.request.url.includes('/_next/')) return;
   e.respondWith(
     caches.match(e.request).then((cached) => cached || fetch(e.request))
   );

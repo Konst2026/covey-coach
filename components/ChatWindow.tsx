@@ -5,7 +5,6 @@ import { Message, loadMessages, saveMessages, clearMessages } from "@/lib/storag
 import { Skill, REFLECTION_QUESTIONS } from "@/lib/covey-data";
 import QuickButtons from "./QuickButtons";
 
-// Web Speech API types not in standard TS lib
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -32,24 +31,26 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({ skill }: ChatWindowProps) {
+  // messages = ONLY completed messages. Never contains placeholders or streaming content.
   const [messages, setMessages] = useState<Message[]>([]);
+  // streamingText: null=idle, ""=show dots, "text"=streaming in progress
+  const [streamingText, setStreamingText] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [reflectionStep, setReflectionStep] = useState<number | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceError, setVoiceError] = useState("");
-  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(true); // ON by default
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const transcriptRef = useRef("");
 
-  // Refs that always hold the latest values — prevent stale closures
+  // Always-fresh refs — eliminate stale closure bugs entirely
   const messagesRef = useRef<Message[]>([]);
   const isStreamingRef = useRef(false);
-  const ttsEnabledRef = useRef(false);
+  const ttsEnabledRef = useRef(true);
   const sendMessageRef = useRef<(text: string) => void>(() => {});
   const reflectionStepRef = useRef<number | null>(null);
 
@@ -59,12 +60,10 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   useEffect(() => { reflectionStepRef.current = reflectionStep; }, [reflectionStep]);
 
   useEffect(() => {
-    setVoiceSupported(
-      typeof window !== "undefined" &&
-        !!(window.SpeechRecognition || window.webkitSpeechRecognition)
-    );
+    setVoiceSupported(!!(window.SpeechRecognition || window.webkitSpeechRecognition));
   }, []);
 
+  // Load from localStorage once on mount
   useEffect(() => {
     const saved = loadMessages();
     if (saved.length > 0) {
@@ -80,107 +79,107 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, streamingText]);
 
   const speakText = useCallback((text: string) => {
-    if (!ttsEnabledRef.current || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const clean = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/[*_]/g, "").trim();
+    if (!ttsEnabledRef.current) return;
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    const synth = window.speechSynthesis;
+    synth.cancel();
+
+    const clean = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/[*_#]/g, "").trim();
     if (!clean) return;
 
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.lang = "ru-RU";
-    utterance.rate = 0.9;
-
-    const doSpeak = () => {
-      const voices = window.speechSynthesis.getVoices();
+    const perform = () => {
+      const utterance = new SpeechSynthesisUtterance(clean);
+      utterance.lang = "ru-RU";
+      utterance.rate = 0.9;
+      const voices = synth.getVoices();
       const ruVoice = voices.find((v) => v.lang.startsWith("ru"));
       if (ruVoice) utterance.voice = ruVoice;
-      // Small delay after cancel() to avoid Chrome silent-fail bug
-      setTimeout(() => window.speechSynthesis.speak(utterance), 100);
+      // resume() wakes up audio context on Chrome Android, then speak
+      synth.resume();
+      synth.speak(utterance);
     };
 
-    if (window.speechSynthesis.getVoices().length > 0) {
-      doSpeak();
+    // Voices may not be loaded on the first call
+    if (synth.getVoices().length > 0) {
+      setTimeout(perform, 100); // short delay after cancel() prevents Chrome silent-fail
     } else {
-      window.speechSynthesis.addEventListener("voiceschanged", doSpeak, { once: true });
+      synth.addEventListener("voiceschanged", () => setTimeout(perform, 100), { once: true });
     }
   }, []);
 
-  // sendMessage uses refs for messages and isStreaming — no stale closure possible
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim() || isStreamingRef.current) return;
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isStreamingRef.current) return;
 
-      isStreamingRef.current = true; // guard against concurrent calls immediately
+    // Set ref immediately — prevents any concurrent call before first await
+    isStreamingRef.current = true;
 
-      const userMsg: Message = { role: "user", content: text };
-      const newMessages = [...messagesRef.current, userMsg];
+    const userMsg: Message = { role: "user", content: text };
+    // Capture message history once — this local variable never changes during the call
+    const newMessages = [...messagesRef.current, userMsg];
 
-      setMessages([...newMessages, { role: "assistant", content: "" }]);
-      setInput("");
-      setIsStreaming(true);
+    setMessages(newMessages);   // messages = [...history, user]. No placeholder here.
+    setStreamingText("");        // empty string = show dots
+    setInput("");
+    setIsStreaming(true);
 
-      try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: newMessages,
-            skillName: skill.name,
-            skillDescription: skill.description,
-          }),
-        });
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages,
+          skillName: skill.name,
+          skillDescription: skill.description,
+        }),
+      });
 
-        if (!res.body) throw new Error("No stream");
+      if (!res.body) throw new Error("No stream");
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let full = "";
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let full = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          full += decoder.decode(value, { stream: true });
-          const snapshot = full;
-          setMessages((prev) => {
-            const updated = [...prev];
-            updated[updated.length - 1] = { role: "assistant", content: snapshot };
-            return updated;
-          });
-        }
-
-        const finalMessages: Message[] = [...newMessages, { role: "assistant", content: full }];
-        saveMessages(finalMessages);
-        speakText(full);
-
-        const step = reflectionStepRef.current;
-        if (step !== null) {
-          const nextStep = step + 1;
-          if (nextStep < REFLECTION_QUESTIONS.length) {
-            setReflectionStep(nextStep);
-            setTimeout(() => sendMessageRef.current(REFLECTION_QUESTIONS[nextStep]), 400);
-          } else {
-            setReflectionStep(null);
-          }
-        }
-      } catch (err) {
-        console.error(err);
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: "assistant",
-            content: "Произошла ошибка. Проверьте API-ключ и попробуйте снова.",
-          };
-          return updated;
-        });
-      } finally {
-        setIsStreaming(false);
-        isStreamingRef.current = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        full += decoder.decode(value, { stream: true });
+        setStreamingText(full); // direct set, no array mutation, no functional updater needed
       }
-    },
-    [skill, speakText]
-  );
+
+      // Streaming done — commit final AI message into messages array
+      const finalMessages: Message[] = [...newMessages, { role: "assistant", content: full }];
+      setMessages(finalMessages);
+      setStreamingText(null);
+      saveMessages(finalMessages);
+      speakText(full);
+
+      const step = reflectionStepRef.current;
+      if (step !== null) {
+        const nextStep = step + 1;
+        if (nextStep < REFLECTION_QUESTIONS.length) {
+          setReflectionStep(nextStep);
+          setTimeout(() => sendMessageRef.current(REFLECTION_QUESTIONS[nextStep]), 400);
+        } else {
+          setReflectionStep(null);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setStreamingText(null);
+      // Append error to completed messages (prev = newMessages since that's the last setMessages call)
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Произошла ошибка. Проверьте соединение и попробуйте снова." },
+      ]);
+    } finally {
+      setIsStreaming(false);
+      isStreamingRef.current = false;
+    }
+  }, [skill, speakText]);
 
   useEffect(() => {
     sendMessageRef.current = sendMessage;
@@ -208,6 +207,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   const handleClear = () => {
     window.speechSynthesis?.cancel();
     clearMessages();
+    setStreamingText(null);
     setMessages([{
       role: "assistant",
       content: `История очищена. Продолжаем с Навыком ${skill.number} — **${skill.name}**. Чем могу помочь?`,
@@ -216,8 +216,16 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
   };
 
   const toggleTts = () => {
-    if (ttsEnabled) window.speechSynthesis?.cancel();
-    setTtsEnabled((v) => !v);
+    const next = !ttsEnabled;
+    if (!next) {
+      window.speechSynthesis?.cancel();
+    } else if (window.speechSynthesis) {
+      // Speak a silent utterance to unlock the audio context on this user gesture
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+    setTtsEnabled(next);
   };
 
   const toggleVoice = useCallback(() => {
@@ -256,9 +264,12 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
       setIsListening(false);
       const text = transcriptRef.current.trim();
       if (text) {
-        transcriptRef.current = "";
-        setInput("");
-        sendMessageRef.current(text);
+        if (!isStreamingRef.current) {
+          transcriptRef.current = "";
+          setInput("");
+          sendMessageRef.current(text);
+        }
+        // if currently streaming, text stays in input field — user can send manually
       }
     };
 
@@ -314,7 +325,7 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
                 <line x1="23" y1="9" x2="17" y2="15" />
               )}
             </svg>
-            <span>{ttsEnabled ? "Голос вкл" : "Голос выкл"}</span>
+            <span>{ttsEnabled ? "Голос AI: вкл" : "Голос AI: выкл"}</span>
           </button>
           <button onClick={handleClear} className="text-xs text-[#6B6355] hover:text-[#A38B4F] transition-colors">
             Очистить
@@ -340,14 +351,26 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             />
           </div>
         ))}
-        {isStreaming && messages[messages.length - 1]?.content === "" && (
+
+        {/* Streaming bubble — completely separate from messages array, so duplication is impossible */}
+        {streamingText !== null && (
           <div className="flex justify-start">
-            <div className="bg-[#EFE8D8] rounded-2xl rounded-bl-sm px-4 py-3">
-              <span className="inline-flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:0ms]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:150ms]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:300ms]" />
-              </span>
+            <div className="bg-[#EFE8D8] text-[#1A1814] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed max-w-[80%]">
+              {streamingText === "" ? (
+                <span className="inline-flex gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:0ms]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:150ms]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#A38B4F] animate-bounce [animation-delay:300ms]" />
+                </span>
+              ) : (
+                <span
+                  dangerouslySetInnerHTML={{
+                    __html: streamingText
+                      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+                      .replace(/\n/g, "<br/>"),
+                  }}
+                />
+              )}
             </div>
           </div>
         )}
@@ -382,7 +405,6 @@ export default function ChatWindow({ skill }: ChatWindowProps) {
             </button>
           )}
           <textarea
-            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
