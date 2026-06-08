@@ -4,12 +4,16 @@ import { getTodaySkill } from "@/lib/covey-data";
 import SkillCard from "@/components/SkillCard";
 import ChatWindow from "@/components/ChatWindow";
 import ChromeBanner from "@/components/ChromeBanner";
+import InstallBanner from "@/components/InstallBanner";
+import NotificationBanner from "@/components/NotificationBanner";
 
 export default function Home() {
   const skill = getTodaySkill();
 
   return (
     <div className="min-h-screen bg-[#F8F5EE] flex flex-col">
+      <InstallBanner />
+      <NotificationBanner />
       <ChromeBanner />
       {/* Header */}
       <header className="border-b border-[#D6C6A5] bg-[#F8F5EE]/80 backdrop-blur-sm sticky top-0 z-10">
